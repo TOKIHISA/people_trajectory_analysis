@@ -1,0 +1,10 @@
+yolo*
+*html
+*.log
+*.png
+*.json
+*.mp4
+*.txt
+*.names
+*.pyc
+diary/
