@@ -11,9 +11,10 @@ Author: Toki Hirose
 
 import json
 import os
+import shutil
 import argparse
 from pathlib import Path
-from config import TRAJECTORY_DIR, VIEWER_DIR
+from config import TRAJECTORY_DIR, VIEWER_DIR, GCP_CONFIG_PATH
 
 
 def find_wgs84_json(trajectory_dir):
@@ -345,6 +346,17 @@ def main():
         f.write(html)
 
     print(f"ビューア生成完了: {out_path}")
+
+    # GCPコンフィグをビューアと同名で隣に保存
+    script_dir = Path(__file__).parent
+    gcp_src = (script_dir / GCP_CONFIG_PATH).resolve()
+    if gcp_src.exists():
+        gcp_dst = viewer_dir / f"{json_path.stem}_viewer_gcp.json"
+        shutil.copy(gcp_src, gcp_dst)
+        print(f"GCPコンフィグ保存: {gcp_dst}")
+    else:
+        print(f"警告: GCPコンフィグが見つかりません: {gcp_src}")
+
     print(f"ブラウザで直接開けます（サーバー不要）")
 
 

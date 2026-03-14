@@ -20,7 +20,7 @@ from collections import defaultdict
 import json
 import onnxruntime as ort
 
-# 設定をインポート
+# import settings
 from config import (
     VIDEO_DIR,
     OUTPUT_DIR,
@@ -37,21 +37,21 @@ from config import (
 
 class CentroidTracker:
     """
-    重心ベースの物体追跡クラス
-    各検出された物体の中心座標を追跡し、IDを割り当てる
+    centroid-based tracking algorithm for associating detected bounding boxes across frames.
+    In addition to tracking centroids, it also maintains trajectories based on the foot point of the bounding box (the point where the person touches the ground), which is more stable for movement analysis.
     """
 
     def __init__(self, max_disappeared=50):
         self.next_object_id = 0
-        self.objects = {}  # ID: 重心座標
-        self.disappeared = {}  # ID: 消失フレーム数
+        self.objects = {}  # ID: (centroid_x, centroid_y)
+        self.disappeared = {}  # ID: disappeared_frame_count
         self.trajectories = defaultdict(list)  # ID: [(x, y, frame), ...]
-        self.first_seen = {}  # ID: 最初に検出されたフレーム
-        self.last_seen = {}  # ID: 最後に検出されたフレーム
+        self.first_seen = {}  # ID: first frame detected
+        self.last_seen = {}  # ID: last frame detected
         self.max_disappeared = max_disappeared
 
     def register(self, centroid, foot_point, frame_num):
-        """新しい物体を登録"""
+        """register a new object with a unique ID"""
         self.objects[self.next_object_id] = centroid
         self.disappeared[self.next_object_id] = 0
         self.trajectories[self.next_object_id].append(
@@ -62,22 +62,22 @@ class CentroidTracker:
         self.next_object_id += 1
 
     def deregister(self, object_id):
-        """物体の追跡を終了"""
+        """deregister an object and remove it from tracking"""
         del self.objects[object_id]
         del self.disappeared[object_id]
 
     def update(self, rects, frame_num):
         """
-        検出結果で追跡を更新
+        update the tracker with new bounding box detections
 
         Args:
-            rects: [(x1, y1, x2, y2), ...] のリスト
-            frame_num: 現在のフレーム番号
+            rects: the list of detected bounding boxes [(x1, y1, x2, y2), ...]
+            frame_num: the current frame number
 
         Returns:
-            objects: {ID: (cx, cy)} の辞書
+            objects: a dictionary mapping object IDs to their current centroids {(cx, cy)}
         """
-        # 検出がない場合
+        # when no detections are present, mark existing objects as disappeared
         if len(rects) == 0:
             for object_id in list(self.disappeared.keys()):
                 self.disappeared[object_id] += 1
@@ -87,31 +87,31 @@ class CentroidTracker:
 
             return self.objects
 
-        # 重心（マッチング用）と足元座標（軌跡記録用・地面接地点）を計算
+        # conpute centroids and foot points for the current detections
         input_centroids = np.zeros((len(rects), 2), dtype="int")
         input_feet = np.zeros((len(rects), 2), dtype="int")
         for i, (x1, y1, x2, y2) in enumerate(rects):
             cx = int((x1 + x2) / 2.0)
             input_centroids[i] = (cx, int((y1 + y2) / 2.0))
-            input_feet[i] = (cx, y2)  # バウンディングボックス底辺中心 = 地面接地点
+            input_feet[i] = (cx, y2)  # foot point is the bottom center of the bounding box
 
-        # 既存の追跡物体がない場合
+        # if no existing objects, register all input centroids
         if len(self.objects) == 0:
             for i in range(len(input_centroids)):
                 self.register(input_centroids[i], input_feet[i], frame_num)
 
-        # 既存物体と新規検出をマッチング
+        # existing objects are present, match input centroids to existing object centroids
         else:
             object_ids = list(self.objects.keys())
             object_centroids = list(self.objects.values())
 
-            # 距離行列を計算
+            # conpute distance matrix between existing object centroids and input centroids
             D = np.zeros((len(object_centroids), len(input_centroids)))
             for i, oc in enumerate(object_centroids):
                 for j, ic in enumerate(input_centroids):
                     D[i, j] = np.linalg.norm(oc - ic)
 
-            # 最小距離でマッチング
+            # find the smallest distance pairs (existing object to input centroid)
             rows = D.min(axis=1).argsort()
             cols = D.argmin(axis=1)[rows]
 
@@ -122,22 +122,22 @@ class CentroidTracker:
                 if row in used_rows or col in used_cols:
                     continue
 
-                # 距離が近い場合のみマッチング
-                if D[row, col] > 100:  # ピクセル単位での最大距離
+                # when distance is lower than a threshold, consider it a match
+                if D[row, col] > 100:  # if the distance is too large, ignore the match (this threshold can be tuned)
                     continue
 
                 object_id = object_ids[row]
-                self.objects[object_id] = input_centroids[col]  # マッチング用は重心を維持
+                self.objects[object_id] = input_centroids[col]  # using the centroid for tracking
                 self.disappeared[object_id] = 0
                 self.trajectories[object_id].append(
-                    (input_feet[col][0], input_feet[col][1], frame_num)  # 軌跡は足元座標
+                    (input_feet[col][0], input_feet[col][1], frame_num)  # using the foot point for trajectory analysis
                 )
                 self.last_seen[object_id] = frame_num
 
                 used_rows.add(row)
                 used_cols.add(col)
 
-            # マッチしなかった既存物体
+            # not matched existing objects
             unused_rows = set(range(D.shape[0])) - used_rows
             for row in unused_rows:
                 object_id = object_ids[row]
@@ -146,7 +146,7 @@ class CentroidTracker:
                 if self.disappeared[object_id] > self.max_disappeared:
                     self.deregister(object_id)
 
-            # マッチしなかった新規検出
+            # not matched input centroids
             unused_cols = set(range(D.shape[1])) - used_cols
             for col in unused_cols:
                 self.register(input_centroids[col], input_feet[col], frame_num)
@@ -155,25 +155,25 @@ class CentroidTracker:
 
 
 def download_yolox_files():
-    """YOLOXモデルファイルのダウンロード・エクスポート手順を表示"""
+    """Display the steps to download and export YOLOX model files"""
     print("\n" + "="*60)
-    print("YOLOX ONNXモデルファイルが必要です")
+    print("YOLOX ONNX model file is required for detection.")
     print("="*60)
-    print("\n以下の手順でONNXファイルを作成してください:\n")
-    print("1. 一時環境でPyTorch + YOLOXをインストール:")
+    print("\nPlease follow these steps to create the ONNX file:\n")
+    print("1. Install PyTorch + YOLOX in a temporary environment:")
     print("   pip install torch yolox onnx")
-    print("\n2. 学習済みモデルをダウンロード:")
+    print("\n2. Download the pre-trained model:")
     print("   https://github.com/Megvii-BaseDetection/YOLOX/releases/download/0.1.1rc0/yolox_tiny.pth")
-    print("\n3. ONNXにエクスポート:")
+    print("\n3. Export to ONNX:")
     print("   python -m yolox.tools.export_onnx --output-name yolox_tiny.onnx -n yolox-tiny -c yolox_tiny.pth --decode_in_inference")
-    print("\n4. yolox_tiny.onnx をこのスクリプトと同じディレクトリに配置")
+    print("\n4. Place yolox_tiny.onnx in the same directory as this script or specify the path in config.py")
     print("="*60 + "\n")
 
 
 def load_yolox_model(onnx_path):
-    """YOLOX ONNXモデルをONNX Runtimeでロード"""
+    """Load YOLOX ONNX model with ONNX Runtime"""
     if not os.path.exists(onnx_path):
-        print(f"エラー: {onnx_path} が見つかりません")
+        print(f"Error: {onnx_path} not found")
         download_yolox_files()
         return None
 
@@ -183,11 +183,11 @@ def load_yolox_model(onnx_path):
 
 def preprocess_yolox(frame, input_w, input_h):
     """
-    YOLOXのレターボックス前処理
+    preprocess the input frame for YOLOX ONNX model (letterbox resize)
 
     Returns:
         blob: shape [1, 3, input_h, input_w], float32
-        ratio: リサイズ比率（元画像座標への逆変換に使用）
+        ratio: resize ratio (used for inverse transformation to original image coordinates)
     """
     img_h, img_w = frame.shape[:2]
     ratio = min(input_w / img_w, input_h / img_h)
@@ -199,8 +199,8 @@ def preprocess_yolox(frame, input_w, input_h):
     padded = np.full((input_h, input_w, 3), YOLOX_PADDING_VALUE, dtype=np.float32)
     padded[:new_h, :new_w, :] = resized.astype(np.float32)
 
-    # HWC -> CHW, バッチ次元を追加
-    # YOLOXは1/255正規化なし、swapRBなし（BGRのまま）
+    # HWC -> CHW, add batch dimension, and convert to float32
+    # Note: the model expects BGR order (OpenCV default), so we keep it as is without converting to RGB
     blob = padded.transpose(2, 0, 1)[np.newaxis, ...]
 
     return blob, ratio
@@ -208,8 +208,9 @@ def preprocess_yolox(frame, input_w, input_h):
 
 def demo_postprocess(outputs, img_size):
     """
-    --decode_in_inference なしでエクスポートされたYOLOX ONNXモデル用の
-    グリッドデコード処理（フォールバック）
+    --decode_in_inference 
+    decode the raw output of the model to bounding box coordinates in the padded image space
+    This is needed because the ONNX model may output raw predictions that require decoding (if not already decoded during export).
     """
     grids = []
     expanded_strides = []
@@ -234,32 +235,32 @@ def demo_postprocess(outputs, img_size):
 
 def detect_persons(frame, session):
     """
-    YOLOX-Tinyでフレーム内の人物を検出
+    Detect persons in the frame using YOLOX-Tiny
 
     Returns:
-        boxes: [(x1, y1, x2, y2), ...] のリスト（元画像座標）
-        confidences: [conf, ...] のリスト
+        boxes: list of [(x1, y1, x2, y2), ...]
+        confidences: list of [conf, ...]
     """
     img_h, img_w = frame.shape[:2]
 
-    # 前処理（レターボックス）
+    # preprocess the frame for YOLOX
     blob, ratio = preprocess_yolox(frame, INPUT_WIDTH, INPUT_HEIGHT)
 
-    # ONNX Runtime で推論
+    # predict with ONNX Runtime
     input_name = session.get_inputs()[0].name
     output = session.run(None, {input_name: blob})[0]
     predictions = output[0]  # [N, 85]
 
-    # デコード済みかどうかを自動判定（座標が小さすぎる場合は未デコード）
+    # if the output is not already decoded (i.e., if the max coordinate value is small), decode it
     if predictions.shape[0] > 0 and np.max(predictions[:, :4]) < 2.0:
         predictions = demo_postprocess(output, (INPUT_HEIGHT, INPUT_WIDTH))[0]
 
-    # objectness * person_class_score で最終信頼度を計算
+    # objectness * person_class_score = confidence score for person class
     objectness = predictions[:, 4]
     person_scores = predictions[:, 5]  # クラス0 = person
     scores = objectness * person_scores
 
-    # 信頼度フィルタ
+    # confidence thresholding
     mask = scores > CONFIDENCE_THRESHOLD
     filtered = predictions[mask]
     filtered_scores = scores[mask]
@@ -267,7 +268,7 @@ def detect_persons(frame, session):
     if len(filtered) == 0:
         return [], []
 
-    # cx, cy, w, h → x1, y1, x2, y2（パディング画像座標）
+    # cx, cy, w, h → x1, y1, x2, y2 in the original image coordinates
     cx = filtered[:, 0]
     cy = filtered[:, 1]
     w = filtered[:, 2]
@@ -278,7 +279,7 @@ def detect_persons(frame, session):
     x2 = (cx + w / 2.0) / ratio
     y2 = (cy + h / 2.0) / ratio
 
-    # 元画像の範囲にクリップ
+    # clip coordinates to be within the original image size
     x1 = np.clip(x1, 0, img_w).astype(int)
     y1 = np.clip(y1, 0, img_h).astype(int)
     x2 = np.clip(x2, 0, img_w).astype(int)
@@ -305,43 +306,51 @@ def detect_persons(frame, session):
 
 def analyze_trajectory(trajectory, fps, frame_width, frame_height):
     """
-    軌跡を分析
+    analysis of a single trajectory
 
     Returns:
-        dict: 分析結果
+        dict: trajectory_details {
+            'duration': duration in seconds,
+            'total_distance': total movement distance in pixels,
+            'start_pos': (x, y),
+            'end_pos': (x, y),
+            'exited': boolean indicating if the person exited the frame (based on proximity to edges),
+            'direction_angle': movement direction in degrees (0-360, where 0 is to the right, 90 is down, etc.),
+            'num_frames': number of frames in the trajectory
+        }
     """
     if len(trajectory) < 2:
         return None
 
-    # 座標とフレーム番号を取得
+    # trajectory is a list of (x, y, frame_num)
     points = np.array([(x, y) for x, y, _ in trajectory])
     frames = np.array([f for _, _, f in trajectory])
 
-    # 移動距離（ピクセル）
+    # movement distance (sum of distances between consecutive points)
     total_distance = 0
     for i in range(1, len(points)):
         total_distance += np.linalg.norm(points[i] - points[i-1])
 
-    # 滞在時間（秒）
+    # duration in seconds
     duration = (frames[-1] - frames[0]) / fps
 
-    # 開始・終了位置
+    # start and end positions
     start_pos = points[0]
     end_pos = points[-1]
 
-    # 画面境界との距離
+    # distance to edges (for exit detection)
     def distance_to_edge(point):
-        """画面端までの最短距離"""
+        """minimum distance from the point to the edges of the frame"""
         x, y = point
         return min(x, y, frame_width - x, frame_height - y)
 
     start_edge_dist = distance_to_edge(start_pos)
     end_edge_dist = distance_to_edge(end_pos)
 
-    # 画面外に出たかどうか（画面端から近い位置で終了）
-    exited = bool(end_edge_dist < 50)  # 50ピクセル以内
+    # if the end position is close to the edge, consider it as exited
+    exited = bool(end_edge_dist < 50)  # just a threshold (can be tuned)
 
-    # 移動方向
+    # movement direction
     direction_vector = end_pos - start_pos
     angle = float(np.arctan2(direction_vector[1], direction_vector[0]) * 180 / np.pi)
 
@@ -357,32 +366,37 @@ def analyze_trajectory(trajectory, fps, frame_width, frame_height):
 
 
 def track_video(video_path, net, output_dir):
-    """動画内の人物を追跡"""
-    print(f"\n処理中: {video_path.name}")
+    """track people in a single video and save the output video and analysis results"""
+    print(f"\nTracking people in: {video_path.name}")
 
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
-        print(f"エラー: 動画を開けません: {video_path}")
+        print(f"error: Failed to open video: {video_path}")
         return
 
-    # 動画情報
+    # Info about the video
     fps = int(cap.get(cv2.CAP_PROP_FPS))
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-    print(f"FPS: {fps}, 解像度: {width}x{height}, 総フレーム数: {total_frames}")
+    print(f"FPS: {fps}, Resolution: {width}x{height}, Total Frames: {total_frames}")
 
-    # 出力設定
+    # Output settings - two videos: one with original footage + tracks, one with tracks only on white background
     output_video_path = os.path.join(output_dir, f"{video_path.stem}_tracked.mp4")
+    output_tracks_path = os.path.join(output_dir, f"{video_path.stem}_tracks_only.mp4")
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = cv2.VideoWriter(output_video_path, fourcc, fps, (width, height))
+    out_tracks = cv2.VideoWriter(output_tracks_path, fourcc, fps, (width, height))
 
-    # トラッカー初期化
+    # Create white background frame for tracks-only video
+    white_frame = np.full((height, width, 3), 255, dtype=np.uint8)
+
+    # Init tracker
     tracker = CentroidTracker(max_disappeared=MAX_DISAPPEARED)
 
     frame_count = 0
-    colors = {}  # ID ごとの色
+    colors = {}  # color for each object ID
 
     while True:
         ret, frame = cap.read()
@@ -391,60 +405,73 @@ def track_video(video_path, net, output_dir):
 
         frame_count += 1
 
-        # 人物検出
+        # person detection
         boxes, confidences = detect_persons(frame, net)
 
-        # 追跡更新
+        # tracker update
         objects = tracker.update(boxes, frame_count)
 
-        # 描画
+        # visualization
         for object_id, centroid in objects.items():
-            # IDごとに色を生成
+            # generate a random color for new object IDs
             if object_id not in colors:
                 colors[object_id] = tuple(map(int, np.random.randint(0, 255, 3)))
 
             color = colors[object_id]
 
-            # 軌跡を描画
+            # visualize trajectory (using foot points) for this object ID
             trajectory = tracker.trajectories[object_id]
             if len(trajectory) > 1:
                 for i in range(1, len(trajectory)):
+                    # video frame
                     cv2.line(frame,
                             (trajectory[i-1][0], trajectory[i-1][1]),
                             (trajectory[i][0], trajectory[i][1]),
                             color, 2)
+                    # tracks-only frame
+                    cv2.line(white_frame,
+                            (trajectory[i-1][0], trajectory[i-1][1]),
+                            (trajectory[i][0], trajectory[i][1]),
+                            color, 2)
 
-            # 現在位置
+            # set circle at the current centroid position (using foot point for better stability)
             cv2.circle(frame, tuple(centroid), 5, color, -1)
+            cv2.circle(white_frame, tuple(centroid), 5, color, -1)
 
-            # ID表示
+            # ID
             text = f"ID: {object_id}"
             cv2.putText(frame, text, (centroid[0] - 10, centroid[1] - 10),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+            cv2.putText(white_frame, text, (centroid[0] - 10, centroid[1] - 10),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
-        # 情報表示
+        # info text
         info_text = f"Frame: {frame_count}/{total_frames} | Active: {len(objects)}"
         cv2.putText(frame, info_text, (10, 30),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
+        # write frames to output videos
         out.write(frame)
+        out_tracks.write(white_frame)
 
         if frame_count % 10 == 0:
             progress = (frame_count / total_frames) * 100
-            print(f"進捗: {progress:.1f}%", end='\r')
+            print(f"Progress: {progress:.1f}%", end='\r')
 
     cap.release()
     out.release()
+    out_tracks.release()
 
-    # 分析結果を保存
+    # save analysis results
     save_analysis(video_path, tracker, fps, width, height, output_dir)
 
-    print(f"\n完了!")
-    print(f"出力動画: {output_video_path}")
+    print(f"\ncompleted tracking for: {video_path.name}")
+    print(f"Output video (original + trajectories): {output_video_path}")
+    print(f"Output tracks-only video: {output_tracks_path}")
 
 
 def save_analysis(video_path, tracker, fps, width, height, output_dir):
-    """分析結果を保存"""
+    """save trajectory analysis results to JSON and text files"""
     analysis_path = os.path.join(output_dir, f"{video_path.stem}_analysis.json")
     txt_path = os.path.join(output_dir, f"{video_path.stem}_analysis.txt")
 
@@ -456,7 +483,7 @@ def save_analysis(video_path, tracker, fps, width, height, output_dir):
         'tracks': []
     }
 
-    # 各追跡IDを分析
+    # analyze each trajectory and compile results
     for object_id, trajectory in tracker.trajectories.items():
         if len(trajectory) < MIN_TRACK_LENGTH:
             continue
@@ -467,7 +494,7 @@ def save_analysis(video_path, tracker, fps, width, height, output_dir):
             analysis['first_frame'] = tracker.first_seen[object_id]
             analysis['last_frame'] = tracker.last_seen[object_id]
 
-            # 軌跡データを追加（ホモグラフィー変換用）
+            # add trajectory points to the analysis (for potential visualization or further analysis)
             analysis['trajectory'] = [
                 {
                     'x': int(x),
@@ -478,7 +505,7 @@ def save_analysis(video_path, tracker, fps, width, height, output_dir):
                 for x, y, frame in trajectory
             ]
 
-            # GeoJSON互換のLineString形式
+            # LineString as geometry for potential GIS visualization (after coordinate transformation)
             analysis['geometry'] = {
                 'type': 'LineString',
                 'coordinates': [[int(x), int(y)] for x, y, _ in trajectory]
@@ -486,42 +513,42 @@ def save_analysis(video_path, tracker, fps, width, height, output_dir):
 
             results['tracks'].append(analysis)
 
-    # JSON保存
+    # save JSON
     with open(analysis_path, 'w', encoding='utf-8') as f:
         json.dump(results, f, indent=2, ensure_ascii=False)
 
-    # テキスト保存
+    # save text summary
     with open(txt_path, 'w', encoding='utf-8') as f:
-        f.write(f"動画: {video_path.name}\n")
-        f.write(f"処理日時: {results['timestamp']}\n")
-        f.write(f"FPS: {fps}, 解像度: {width}x{height}\n")
+        f.write(f"video: {video_path.name}\n")
+        f.write(f"processing time: {results['timestamp']}\n")
+        f.write(f"FPS: {fps}, resolution: {width}x{height}\n")
         f.write(f"\n{'='*60}\n")
-        f.write(f"追跡結果 (最小フレーム数: {MIN_TRACK_LENGTH})\n")
+        f.write(f"Tracking Results (Minimum Frames: {MIN_TRACK_LENGTH})\n")
         f.write(f"{'='*60}\n\n")
 
         for track in results['tracks']:
             f.write(f"ID {track['id']}:\n")
-            f.write(f"  滞在時間: {track['duration']:.2f}秒\n")
-            f.write(f"  移動距離: {track['total_distance']:.1f}ピクセル\n")
-            f.write(f"  開始位置: ({track['start_pos'][0]:.0f}, {track['start_pos'][1]:.0f})\n")
-            f.write(f"  終了位置: ({track['end_pos'][0]:.0f}, {track['end_pos'][1]:.0f})\n")
-            f.write(f"  画面外退出: {'はい' if track['exited'] else 'いいえ'}\n")
-            f.write(f"  移動方向: {track['direction_angle']:.1f}度\n")
-            f.write(f"  フレーム数: {track['num_frames']}\n\n")
+            f.write(f"  Dwell Time: {track['duration']:.2f} seconds\n")
+            f.write(f"  Travel Distance: {track['total_distance']:.1f} pixels\n")
+            f.write(f"  Start Position: ({track['start_pos'][0]:.0f}, {track['start_pos'][1]:.0f})\n")
+            f.write(f"  End Position: ({track['end_pos'][0]:.0f}, {track['end_pos'][1]:.0f})\n")
+            f.write(f"  Exited Screen: {'Yes' if track['exited'] else 'No'}\n")
+            f.write(f"  Movement Direction: {track['direction_angle']:.1f} degrees\n")
+            f.write(f"  Number of Frames: {track['num_frames']}\n\n")
 
-    print(f"分析結果: {txt_path}")
+    print(f"Analysis Results: {txt_path}")
 
 
 def main():
-    """メイン処理"""
+    """main function to process all videos in the input directory"""
     print("=" * 60)
-    print("OpenCV 通勤者追跡・動線分析システム")
+    print("people_trajectory - People Detection and Tracking with OpenCV and YOLOX")
     print("=" * 60)
 
-    # 出力ディレクトリ
+    # output directory setup
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-    # YOLOXモデルロード
+    # load YOLOX model
     script_dir = os.path.dirname(os.path.abspath(__file__))
     onnx_path = os.path.join(script_dir, YOLOX_ONNX)
 
@@ -529,9 +556,9 @@ def main():
     if net is None:
         return
 
-    print("YOLOXモデルロード完了")
+    print("load YOLOX model successful")
 
-    # 動画ファイル取得
+    # get video files from the input directory
     video_extensions = ['.mp4', '.avi', '.mov', '.MP4', '.AVI', '.MOV']
     video_files = []
 
@@ -541,18 +568,18 @@ def main():
             video_files.extend(video_path.glob(f'*{ext}'))
 
     if not video_files:
-        print(f"\nエラー: 動画ファイルが見つかりません: {VIDEO_DIR}")
+        print(f"\nNo video files found in: {VIDEO_DIR}")
         return
 
-    print(f"\n{len(video_files)} 個の動画ファイルが見つかりました")
+    print(f"\n{len(video_files)} video files found")
 
-    # 処理
+    # Process each video file
     for i, video_file in enumerate(video_files, 1):
         print(f"\n[{i}/{len(video_files)}]")
         track_video(video_file, net, OUTPUT_DIR)
 
     print("\n" + "=" * 60)
-    print("すべての処理が完了しました")
+    print("All processing completed successfully")
     print("=" * 60)
 
 
