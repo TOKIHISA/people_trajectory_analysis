@@ -1,9 +1,9 @@
 """
-OpenCV を使用して動画内の通勤者を検出・追跡するスクリプト
-- YOLOX-Tiny (OpenCV DNN + ONNX) で人物検出(CentroidTrackerで追跡)
-- 動線分析・滞在時間測定
+Detect trajectory pedestrians
+- YOLOX-Tiny (OpenCV DNN + ONNX) 
+- CentroidTracker
 
-必要なライブラリ:
+requirement:
 pip install opencv-python numpy
 
 License: MIT License
