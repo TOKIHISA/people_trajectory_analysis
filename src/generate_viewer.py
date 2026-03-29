@@ -1,9 +1,9 @@
 """
-wgs84.json から MapLibre 軌跡ビューア HTML を生成する
+Generate a MapLibre trajectory viewer HTML from a wgs84.json file
 
 Usage:
-  python generate_viewer.py                          # デフォルトのoutputから読む
-  python generate_viewer.py -i path/to/wgs84.json    # 指定ファイル
+  python generate_viewer.py                          # reads from default output directory
+  python generate_viewer.py -i path/to/wgs84.json    # specify input file
 
 License: MIT License
 Author: Toki Hirose
@@ -18,16 +18,16 @@ from config import TRAJECTORY_DIR, VIEWER_DIR, GCP_CONFIG_PATH
 
 
 def find_wgs84_json(trajectory_dir):
-    """trajectory_dir 内の *_wgs84.json を探す"""
+    """Find *_wgs84.json files in trajectory_dir"""
     files = sorted(Path(trajectory_dir).glob("*_wgs84.json"))
     if not files:
         return None
     if len(files) == 1:
         return files[0]
-    print("複数のwgs84.jsonがあります:")
+    print("Multiple wgs84.json files found:")
     for i, f in enumerate(files):
         print(f"  {i + 1}. {f.name}")
-    idx = input(f"番号を選択 (1-{len(files)}): ").strip()
+    idx = input(f"Select a number (1-{len(files)}): ").strip()
     try:
         return files[int(idx) - 1]
     except (ValueError, IndexError):
@@ -35,21 +35,21 @@ def find_wgs84_json(trajectory_dir):
 
 
 def generate_html(data, json_filename):
-    """軌跡データからHTMLを生成"""
+    """Generate HTML from trajectory data"""
     tracks = [t for t in data.get("tracks", [])
               if t.get("trajectory_wgs84") and len(t["trajectory_wgs84"]) >= 2]
 
     if not tracks:
-        print("エラー: 表示可能な軌跡がありません")
+        print("Error: no displayable trajectories found")
         return None
 
-    # 最初の軌跡の中間点を地図中心にする
+    # Use the midpoint of the first trajectory as the map center
     first = tracks[0]["trajectory_wgs84"]
     mid = first[len(first) // 2]
     center_lon = mid["lon"]
     center_lat = mid["lat"]
 
-    # 軌跡データをJS用に変換（lon / lat / time_sec）
+    # Convert trajectory data for JavaScript (lon / lat / time_sec)
     js_tracks = []
     for track in tracks:
         coords = [[p["lon"], p["lat"], p["time_sec"]] for p in track["trajectory_wgs84"]]
@@ -59,19 +59,19 @@ def generate_html(data, json_filename):
             "end":   coords[-1][2],
         })
 
-    # 動画全体の時間長（全トラックの最終時刻）
+    # Total video duration (latest end time across all tracks)
     video_duration = max(t["end"] for t in js_tracks)
-    # MM:SS 文字列
+    # MM:SS string
     dur_m = int(video_duration // 60)
     dur_s = int(video_duration % 60)
     dur_str = f"{dur_m:02d}:{dur_s:02d}"
 
-    # トラックごとの色を事前計算（Python側で）
+    # Pre-compute per-track colors in Python
     track_colors = []
     n = len(js_tracks)
     for i in range(n):
-        hue = 200 if n == 1 else (i * 137.508) % 360  # 黄金角で隣接インデックスを最大分離
-        # HSL→RGB 変換（s=0.9, l=0.6）
+        hue = 200 if n == 1 else (i * 137.508) % 360  # golden angle to maximize separation between adjacent indices
+        # HSL to RGB conversion (s=0.9, l=0.6)
         h, s, l = hue / 360, 0.9, 0.6
         c = (1 - abs(2 * l - 1)) * s
         x = c * (1 - abs((hue / 60) % 2 - 1))
@@ -156,7 +156,7 @@ const TRACK_COLORS  = {colors_json};
 const CENTER        = [{center_lon}, {center_lat}];
 const VIDEO_DURATION = {video_duration:.2f};
 
-// 全トラックの背景座標（lon/lat のみ・固定）
+// Background coordinates for all tracks (lon/lat only, static)
 const BG_COORDS = TRACKS.map(t => t.coords.map(([lon, lat]) => [lon, lat]));
 
 function fmtTime(s) {{
@@ -197,22 +197,22 @@ const map = new maplibregl.Map({{
         attribution: '&copy; OpenStreetMap contributors'
       }}
     }},
-    layers: [{{ id: 'osm', type: 'raster', source: 'osm' }}]  // maxzoom 省略 = 常時表示
+    layers: [{{ id: 'osm', type: 'raster', source: 'osm' }}]  // no maxzoom = always visible
   }},
   center: CENTER,
   zoom: 19
 }});
 
 map.on('load', () => {{
-  // ─── ソースは全トラック合計 2つだけ ───────────────────────────
-  // 背景: 活動中トラックの全経路（更新は activate/deactivate 時のみ）
+  // ─── Only 2 sources total for all tracks ───────────────────────────
+  // Background: full path of each active track (updated only on activate/deactivate)
   map.addSource('bg', {{ type: 'geojson', data: EMPTY_FC }});
   map.addLayer({{
     id: 'bg', type: 'line', source: 'bg',
     paint: {{ 'line-color': ['get', 'color'], 'line-width': 2, 'line-opacity': 0.15 }}
   }});
 
-  // トレイル: 毎フレーム更新（現在時刻付近の軌跡スライス）
+  // Trail: updated every frame (trajectory slice around current time)
   map.addSource('trail', {{ type: 'geojson', data: EMPTY_FC }});
   map.addLayer({{
     id: 'trail-glow', type: 'line', source: 'trail',
@@ -237,7 +237,7 @@ map.on('load', () => {{
 
   let currentTime = 0;
   let lastTs      = null;
-  const activeSet = new Set(); // 活動中トラックのインデックス集合
+  const activeSet = new Set(); // set of indices of currently active tracks
 
   function buildBgFC(active) {{
     return {{
@@ -271,7 +271,7 @@ map.on('load', () => {{
       const coords   = track.coords;
       const isActive = currentTime >= track.start && trailStart <= track.end;
 
-      // 背景の表示状態が変わった時だけ dirty フラグを立てる
+      // Set dirty flag only when a track's active state changes
       if (isActive !== activeSet.has(i)) {{
         isActive ? activeSet.add(i) : activeSet.delete(i);
         bgDirty = true;
@@ -293,10 +293,10 @@ map.on('load', () => {{
       }}
     }}
 
-    // トレイル: 毎フレーム 1回だけ setData
+    // Trail: call setData exactly once per frame
     map.getSource('trail').setData({{ type: 'FeatureCollection', features: trailFeatures }});
 
-    // 背景: activate/deactivate が発生した時だけ更新
+    // Background: update only when a track is activated or deactivated
     if (bgDirty) map.getSource('bg').setData(buildBgFC(activeSet));
 
     requestAnimationFrame(animate);
@@ -309,31 +309,31 @@ map.on('load', () => {{
 
 
 def main():
-    parser = argparse.ArgumentParser(description="軌跡ビューアHTMLを生成")
+    parser = argparse.ArgumentParser(description="Generate trajectory viewer HTML")
     parser.add_argument("-i", "--input", type=str, default=None,
-                        help="wgs84.json ファイルパス")
+                        help="Path to wgs84.json file")
     parser.add_argument("-o", "--output-dir", type=str, default=None,
-                        help="出力ディレクトリ（デフォルト: output/viewer）")
+                        help="Output directory (default: output/viewer)")
     args = parser.parse_args()
 
-    # 入力ファイル
+    # Input file
     if args.input:
         json_path = Path(args.input)
     else:
         json_path = find_wgs84_json(TRAJECTORY_DIR)
 
     if json_path is None or not json_path.exists():
-        print(f"エラー: wgs84.json が見つかりません")
+        print(f"Error: wgs84.json not found")
         return
 
-    # 出力先
+    # Output directory
     if args.output_dir:
         viewer_dir = Path(args.output_dir)
     else:
         viewer_dir = Path(VIEWER_DIR)
     viewer_dir.mkdir(parents=True, exist_ok=True)
 
-    # データ読み込み
+    # Load data
     with open(json_path, encoding="utf-8") as f:
         data = json.load(f)
 
@@ -345,19 +345,19 @@ def main():
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(html)
 
-    print(f"ビューア生成完了: {out_path}")
+    print(f"Viewer generated: {out_path}")
 
-    # GCPコンフィグをビューアと同名で隣に保存
+    # Copy GCP config alongside the viewer file
     script_dir = Path(__file__).parent
     gcp_src = (script_dir / GCP_CONFIG_PATH).resolve()
     if gcp_src.exists():
         gcp_dst = viewer_dir / f"{json_path.stem}_viewer_gcp.json"
         shutil.copy(gcp_src, gcp_dst)
-        print(f"GCPコンフィグ保存: {gcp_dst}")
+        print(f"GCP config saved: {gcp_dst}")
     else:
-        print(f"警告: GCPコンフィグが見つかりません: {gcp_src}")
+        print(f"Warning: GCP config not found: {gcp_src}")
 
-    print(f"ブラウザで直接開けます（サーバー不要）")
+    print(f"Open the HTML file directly in a browser (no server required)")
 
 
 if __name__ == "__main__":

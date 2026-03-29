@@ -1,11 +1,11 @@
 """
-人物検出 → 追跡 → ホモグラフィー変換 の全パイプラインを実行
+Run the full pipeline: person detection → tracking → homography transformation
 
-ステップ:
-  1. GCP地図選択     - ブラウザで地図を開きWGS84座標を取得
-  2. GCP動画選択     - 動画フレームで対応する画像座標を取得
-  3. 人物検出・追跡   - YOLOで人物検出し軌跡を出力
-  4. ホモグラフィー変換 - 軌跡をWGS84座標に変換
+Steps:
+  1. GCP map selection    - Open a browser map to collect WGS84 coordinates
+  2. GCP video selection  - Click corresponding image coordinates on a video frame
+  3. Person detection     - Detect and track people with YOLO, output trajectories
+  4. Homography transform - Convert trajectories to WGS84 coordinates
 
 License: MIT License
 Author: Toki Hirose
@@ -31,24 +31,24 @@ from config import (
 
 
 def step2_select_gcp_map(gcp_config_path: str) -> bool:
-    """Step 2: 地図でGCPのWGS84座標を選択"""
+    """Step 2: Select GCP WGS84 coordinates on a map"""
     print("\n" + "=" * 60)
-    print("Step 2: 地図でGCPを選択（動画の点に対応する地図上の点）")
+    print("Step 2: Select GCPs on the map (map points corresponding to video points)")
     print("=" * 60)
 
-    # 既にWGS84座標がある場合はスキップ
+    # Skip if WGS84 coordinates already exist
     if os.path.exists(gcp_config_path):
         with open(gcp_config_path, 'r', encoding='utf-8') as f:
             config = json.load(f)
         if len(config.get('gcp_wgs84', [])) >= 4:
-            print(f"  GCP設定が既にあります ({len(config['gcp_wgs84'])}点)")
-            ans = input("  再選択しますか？ (y/N): ").strip().lower()
+            print(f"  GCP config already exists ({len(config['gcp_wgs84'])} points)")
+            ans = input("  Re-select? (y/N): ").strip().lower()
             if ans != 'y':
                 return True
 
     from gcp_selector_map import create_gcp_selector_map
 
-    # GCPポイント付きフレーム画像があれば地図に表示
+    # Show frame image with GCP points in the map panel if available
     frame_image_path = os.path.join(
         os.path.dirname(gcp_config_path), "gcp_frame.png"
     )
@@ -64,16 +64,16 @@ def step2_select_gcp_map(gcp_config_path: str) -> bool:
 
     webbrowser.open('file://' + os.path.abspath(html_path))
 
-    print("\n  ブラウザで地図が開きました")
-    print("  1. 4点以上クリックしてGCPを選択")
-    print("  2. 「JSONをエクスポート」ボタンでgcp_config.jsonを保存")
-    print(f"  3. 保存先: {os.path.abspath(gcp_config_path)}")
+    print("\n  Map opened in browser")
+    print("  1. Click 4 or more points to select GCPs")
+    print("  2. Click 'Export JSON' to save gcp_config.json")
+    print(f"  3. Save location: {os.path.abspath(gcp_config_path)}")
 
-    input("\n  完了したらEnterを押してください...")
+    input("\n  Press Enter when done...")
 
-    # 確認
+    # Verify
     if not os.path.exists(gcp_config_path):
-        print("  エラー: gcp_config.jsonが見つかりません")
+        print("  Error: gcp_config.json not found")
         return False
 
     with open(gcp_config_path, 'r', encoding='utf-8') as f:
@@ -81,68 +81,68 @@ def step2_select_gcp_map(gcp_config_path: str) -> bool:
 
     n_points = len(config.get('gcp_wgs84', []))
     if n_points < 4:
-        print(f"  エラー: GCPが{n_points}点しかありません（4点以上必要）")
+        print(f"  Error: only {n_points} GCPs found (4 or more required)")
         return False
 
-    print(f"  OK: {n_points}点のGCPを確認")
+    print(f"  OK: {n_points} GCPs confirmed")
     return True
 
 
 def step1_select_gcp_video(video_path: str, gcp_config_path: str) -> bool:
-    """Step 1: 動画フレームでGCPの画像座標を選択"""
+    """Step 1: Select GCP image coordinates from a video frame"""
     print("\n" + "=" * 60)
-    print("Step 1: 動画フレームでGCPの画像座標を選択")
+    print("Step 1: Select GCP image coordinates from a video frame")
     print("=" * 60)
 
-    # 既に画像座標がある場合はスキップ
+    # Skip if image coordinates already exist
     if os.path.exists(gcp_config_path):
         with open(gcp_config_path, 'r', encoding='utf-8') as f:
             config = json.load(f)
         if len(config.get('gcp_image', [])) >= 4:
-            print(f"  画像座標が既にあります ({len(config['gcp_image'])}点)")
-            ans = input("  再選択しますか？ (y/N): ").strip().lower()
+            print(f"  Image coordinates already exist ({len(config['gcp_image'])} points)")
+            ans = input("  Re-select? (y/N): ").strip().lower()
             if ans != 'y':
                 return True
 
     from gcp_selector_video import GCPVideoSelector, update_gcp_config
 
-    print(f"  動画: {video_path}")
-    print(f"  フレーム: {GCP_FRAME_SEC}秒後")
+    print(f"  Video: {video_path}")
+    print(f"  Frame: {GCP_FRAME_SEC}s")
 
     selector = GCPVideoSelector(video_path, GCP_FRAME_SEC)
     points = selector.select_points()
 
     if not points:
-        print("  キャンセルされました")
+        print("  Cancelled")
         return False
 
     update_gcp_config(gcp_config_path, points, video_path)
 
-    # GCPポイント付きフレーム画像を保存（Step 2の地図で参照用）
+    # Save annotated frame image for reference in Step 2 map panel
     frame_path = os.path.join(
         os.path.dirname(gcp_config_path), "gcp_frame.png"
     )
     os.makedirs(os.path.dirname(frame_path), exist_ok=True)
     selector.save_frame(frame_path)
 
-    print(f"  OK: {len(points)}点の画像座標を保存")
-    print(f"  → 次のステップで地図上の対応点を{len(points)}点選択してください")
+    print(f"  OK: {len(points)} image coordinates saved")
+    print(f"  → In the next step, select {len(points)} corresponding points on the map")
     return True
 
 
 def step3_detect_and_track(video_path: str, output_dir: str) -> str:
-    """Step 3: 人物検出・追跡"""
+    """Step 3: Person detection and tracking"""
     print("\n" + "=" * 60)
-    print("Step 3: 人物検出・追跡")
+    print("Step 3: Person detection and tracking")
     print("=" * 60)
 
     video_name = Path(video_path).stem
     analysis_json = os.path.join(output_dir, f"{video_name}_analysis.json")
 
-    # 既に結果がある場合はスキップ
+    # Skip if results already exist
     if os.path.exists(analysis_json):
-        print(f"  検出結果が既にあります: {analysis_json}")
-        ans = input("  再実行しますか？ (y/N): ").strip().lower()
+        print(f"  Detection results already exist: {analysis_json}")
+        ans = input("  Re-run? (y/N): ").strip().lower()
         if ans != 'y':
             return analysis_json
 
@@ -155,13 +155,13 @@ def step3_detect_and_track(video_path: str, output_dir: str) -> str:
     if net is None:
         return None
 
-    print(f"  動画: {video_path}")
-    print(f"  出力先: {output_dir}")
+    print(f"  Video: {video_path}")
+    print(f"  Output: {output_dir}")
 
     track_video(Path(video_path), net, output_dir)
 
     if not os.path.exists(analysis_json):
-        print("  エラー: 検出結果が生成されませんでした")
+        print("  Error: detection results were not generated")
         return None
 
     print(f"  OK: {analysis_json}")
@@ -173,33 +173,55 @@ def step4_homography_transform(
     gcp_config_path: str,
     output_dir: str
 ) -> str:
-    """Step 4: ホモグラフィー変換"""
+    """Step 4: Homography transformation"""
     print("\n" + "=" * 60)
-    print("Step 4: ホモグラフィー変換")
+    print("Step 4: Homography transformation")
     print("=" * 60)
 
     from project_v2wgs84 import HomographyTransformer, transform_tracking_json
 
-    # GCP設定を読み込み
+    # Load GCP config
     with open(gcp_config_path, 'r', encoding='utf-8') as f:
         gcp_config = json.load(f)
 
-    # ホモグラフィー行列を計算
+    # Save / validate per-video GCP config for reproducibility
+    video_stem = Path(analysis_json).stem.replace('_analysis', '')
+    saved_gcp_path = Path(output_dir) / f"{video_stem}_gcp_config.json"
+
+    if saved_gcp_path.exists():
+        with open(saved_gcp_path, 'r', encoding='utf-8') as f:
+            saved_gcp = json.load(f)
+        if saved_gcp != gcp_config:
+            print(f"\n  WARNING: gcp_config differs from previously saved calibration!")
+            print(f"  Saved   : {saved_gcp_path}")
+            print(f"  Current : {gcp_config_path}")
+            answer = input("  Continue with current gcp_config? [y/N]: ").strip().lower()
+            if answer != 'y':
+                print("  Aborted.")
+                return None
+        else:
+            print(f"  GCP config matches saved calibration: {saved_gcp_path.name}")
+    else:
+        with open(saved_gcp_path, 'w', encoding='utf-8') as f:
+            json.dump(gcp_config, f, indent=2, ensure_ascii=False)
+        print(f"  GCP config saved: {saved_gcp_path.name}")
+
+    # Compute homography matrix
     transformer = HomographyTransformer()
     transformer.compute_from_gcp(
         gcp_config['gcp_image'],
         gcp_config['gcp_wgs84']
     )
 
-    # ホモグラフィー行列を保存
+    # Save homography matrix
     h_path = os.path.join(output_dir, "homography.json")
     transformer.save(h_path)
 
-    # 出力パス
+    # Output path
     input_path = Path(analysis_json)
     output_json = str(input_path.parent / f"{input_path.stem}_wgs84.json")
 
-    # 変換を適用
+    # Apply transformation
     transform_tracking_json(analysis_json, output_json, transformer)
 
     print(f"  OK: {output_json}")
@@ -207,9 +229,9 @@ def step4_homography_transform(
 
 
 def step5_generate_viewer(wgs84_json: str, viewer_dir: str) -> str:
-    """Step 5: 軌跡ビューアHTMLを生成"""
+    """Step 5: Generate trajectory viewer HTML"""
     print("\n" + "=" * 60)
-    print("Step 5: 軌跡ビューア生成")
+    print("Step 5: Generate trajectory viewer")
     print("=" * 60)
 
     from generate_viewer import generate_html
@@ -233,12 +255,12 @@ def step5_generate_viewer(wgs84_json: str, viewer_dir: str) -> str:
 
 
 def run_all(video_path: str = None, output_dir: str = None, gcp_config_path: str = None):
-    """全パイプラインを実行"""
+    """Run the full pipeline"""
     print("=" * 60)
-    print("  人物追跡 → WGS84変換 パイプライン")
+    print("  Person tracking → WGS84 conversion pipeline")
     print("=" * 60)
 
-    # デフォルト値の設定
+    # Set defaults
     if output_dir is None:
         output_dir = OUTPUT_DIR
     if gcp_config_path is None:
@@ -251,70 +273,70 @@ def run_all(video_path: str = None, output_dir: str = None, gcp_config_path: str
     os.makedirs(trajectory_dir, exist_ok=True)
     os.makedirs(viewer_dir, exist_ok=True)
 
-    # 動画ファイルの選択
+    # Select video file
     if video_path is None:
         video_dir = Path(VIDEO_DIR)
         videos = sorted(video_dir.glob("*.mp4")) + sorted(video_dir.glob("*.avi"))
 
         if not videos:
-            print(f"エラー: {VIDEO_DIR} に動画がありません")
+            print(f"Error: no videos found in {VIDEO_DIR}")
             return
 
-        print(f"\n動画ファイル一覧 ({video_dir}):")
+        print(f"\nVideo files ({video_dir}):")
         for i, v in enumerate(videos):
             print(f"  {i + 1}. {v.name}")
 
-        idx = input(f"\n番号を選択 (1-{len(videos)}): ").strip()
+        idx = input(f"\nSelect a number (1-{len(videos)}): ").strip()
         try:
             video_path = str(videos[int(idx) - 1])
         except (ValueError, IndexError):
-            print("無効な選択です")
+            print("Invalid selection")
             return
 
-    print(f"\n対象動画: {video_path}")
+    print(f"\nTarget video: {video_path}")
 
-    # Step 1: 動画でGCP画像座標を選択（先に動画で特徴点を決める）
+    # Step 1: Select GCP image coordinates from the video (identify features first)
     if not step1_select_gcp_video(video_path, gcp_config_path):
-        print("\nStep 1 でエラーが発生しました")
+        print("\nError in Step 1")
         return
 
-    # Step 2: 地図でGCP WGS84座標を選択（動画の点に対応する地図上の点）
+    # Step 2: Select GCP WGS84 coordinates on the map (corresponding to video points)
     if not step2_select_gcp_map(gcp_config_path):
-        print("\nStep 2 でエラーが発生しました")
+        print("\nError in Step 2")
         return
 
-    # Step 3: 人物検出・追跡
+    # Step 3: Person detection and tracking
     analysis_json = step3_detect_and_track(video_path, trajectory_dir)
     if analysis_json is None:
-        print("\nStep 3 でエラーが発生しました")
+        print("\nError in Step 3")
         return
 
-    # Step 4: ホモグラフィー変換
+    # Step 4: Homography transformation
     output_json = step4_homography_transform(
         analysis_json, gcp_config_path, trajectory_dir
     )
     if output_json is None:
-        print("\nStep 4 でエラーが発生しました")
+        print("\nError in Step 4")
         return
 
-    # Step 5: ビューア生成
+    # Step 5: Generate viewer
     viewer_path = step5_generate_viewer(output_json, viewer_dir)
 
-    # 完了
+    # Done
     print("\n" + "=" * 60)
-    print("  全ステップ完了!")
+    print("  All steps complete!")
     print("=" * 60)
-    print(f"  入力動画:     {video_path}")
-    print(f"  GCP設定:      {gcp_config_path}")
-    print(f"  検出結果:     {analysis_json}")
-    print(f"  WGS84変換結果: {output_json}")
+    print(f"  Input video:       {video_path}")
+    print(f"  GCP config:        {gcp_config_path}")
+    print(f"  Detection results: {analysis_json}")
+    print(f"  WGS84 output:      {output_json}")
     if viewer_path:
-        print(f"  ビューア:     {viewer_path}")
+        print(f"  Viewer:            {viewer_path}")
     print("=" * 60)
 
-    # ビューアをブラウザで開く
+    # Open viewer in browser
     if viewer_path:
-        ans = input("\nビューアをブラウザで開きますか？ (Y/n): ").strip().lower()
+        ans = input("\nOpen viewer in browser? (Y/n): ").strip().lower()
         if ans != 'n':
             webbrowser.open(Path(viewer_path).absolute().as_uri())
 
@@ -322,10 +344,10 @@ def run_all(video_path: str = None, output_dir: str = None, gcp_config_path: str
 if __name__ == '__main__':
     import argparse
 
-    parser = argparse.ArgumentParser(description='全パイプラインを実行')
-    parser.add_argument('--video', '-v', type=str, default=None, help='動画ファイルパス')
-    parser.add_argument('--output', '-o', type=str, default=None, help='出力ディレクトリ')
-    parser.add_argument('--gcp', '-g', type=str, default=None, help='GCP設定ファイル')
+    parser = argparse.ArgumentParser(description='Run the full pipeline')
+    parser.add_argument('--video', '-v', type=str, default=None, help='Path to video file')
+    parser.add_argument('--output', '-o', type=str, default=None, help='Output directory')
+    parser.add_argument('--gcp', '-g', type=str, default=None, help='GCP config file')
 
     args = parser.parse_args()
 

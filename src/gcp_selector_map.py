@@ -1,12 +1,12 @@
 """
-Foliumを使って地図上でGCP（Ground Control Points）を選択するツール
+Tool for selecting GCPs (Ground Control Points) on a map using Folium
 
-使い方:
-1. このスクリプトを実行
-2. ブラウザで生成されたHTMLを開く
-3. 地図上で4点以上をクリック
-4. 右側のパネルに表示される座標をコピー
-5. gcp_config.jsonを編集して座標を追加
+Usage:
+1. Run this script
+2. Open the generated HTML in a browser
+3. Click 4 or more points on the map
+4. Copy the coordinates shown in the right panel
+5. Edit gcp_config.json to add the coordinates
 
 License: MIT License
 Author: Toki Hirose
@@ -22,40 +22,40 @@ from pathlib import Path
 
 
 def create_gcp_selector_map(
-    center_lat: float = 35.6812,  # 東京駅付近
+    center_lat: float = 35.6812,  # near Tokyo Station
     center_lon: float = 139.7671,
     zoom_start: int = 18,
     output_path: str = None,
     frame_image_path: str = None
 ) -> str:
     """
-    GCP選択用の地図HTMLを生成
+    Generate a map HTML for GCP selection
 
     Args:
-        center_lat: 地図の中心緯度
-        center_lon: 地図の中心経度
-        zoom_start: 初期ズームレベル
-        output_path: 出力HTMLパス
-        frame_image_path: GCPポイント付き動画フレーム画像パス
+        center_lat: Map center latitude
+        center_lon: Map center longitude
+        zoom_start: Initial zoom level
+        output_path: Output HTML path
+        frame_image_path: Path to video frame image with GCP points marked
 
     Returns:
-        str: 生成されたHTMLファイルのパス
+        str: Path to the generated HTML file
     """
-    # 地図を作成（ベースレイヤーなしで開始）
+    # Create map with no base layer
     m = folium.Map(
         location=[center_lat, center_lon],
         zoom_start=zoom_start,
         tiles=None
     )
 
-    # OpenStreetMapレイヤー
+    # OpenStreetMap layer
     folium.TileLayer(
         tiles='OpenStreetMap',
         name='OpenStreetMap',
         control=True
     ).add_to(m)
 
-    # 航空写真レイヤー（Esri World Imagery）
+    # Aerial imagery layer (Esri World Imagery)
     folium.TileLayer(
         tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
         attr='Esri',
@@ -63,7 +63,7 @@ def create_gcp_selector_map(
         control=True
     ).add_to(m)
 
-    # 国土地理院 航空写真
+    # GSI (Geospatial Information Authority of Japan) aerial imagery
     folium.TileLayer(
         tiles='https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg',
         attr='国土地理院',
@@ -71,7 +71,7 @@ def create_gcp_selector_map(
         control=True
     ).add_to(m)
 
-    # 国土地理院 標準地図
+    # GSI standard map
     folium.TileLayer(
         tiles='https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png',
         attr='国土地理院',
@@ -79,10 +79,10 @@ def create_gcp_selector_map(
         control=True
     ).add_to(m)
 
-    # レイヤーコントロールを追加
+    # Add layer control
     folium.LayerControl(position='topleft').add_to(m)
 
-    # マウス位置表示
+    # Show mouse coordinates
     MousePosition(
         position='topright',
         separator=' | ',
@@ -91,13 +91,13 @@ def create_gcp_selector_map(
         lng_formatter="function(lng) {return lng.toFixed(8);}"
     ).add_to(m)
 
-    # フレーム画像をbase64に変換
+    # Encode frame image to base64
     frame_img_b64 = ""
     if frame_image_path and os.path.exists(frame_image_path):
         with open(frame_image_path, "rb") as f:
             frame_img_b64 = base64.b64encode(f.read()).decode("utf-8")
 
-    # クリックで座標を取得するJavaScript
+    # JavaScript for capturing click coordinates
     click_js = """
     <script>
     var gcpPoints = [];
@@ -105,7 +105,7 @@ def create_gcp_selector_map(
 
     function updateGCPList() {
         var listHtml = '<h4>GCP Points (WGS84)</h4>';
-        listHtml += '<p>クリックで点を追加（4点以上必要）</p>';
+        listHtml += '<p>Click to add points (4 or more required)</p>';
         listHtml += '<table style="width:100%; font-size:12px;">';
         listHtml += '<tr><th>#</th><th>Lat</th><th>Lon</th><th></th></tr>';
 
@@ -120,10 +120,10 @@ def create_gcp_selector_map(
         listHtml += '</table>';
 
         if (gcpPoints.length >= 4) {
-            listHtml += '<br><button onclick="exportGCP()" style="width:100%; padding:10px; background:#4CAF50; color:white; border:none; cursor:pointer;">JSONをエクスポート</button>';
+            listHtml += '<br><button onclick="exportGCP()" style="width:100%; padding:10px; background:#4CAF50; color:white; border:none; cursor:pointer;">Export JSON</button>';
         }
 
-        listHtml += '<br><br><h4>JSON出力:</h4>';
+        listHtml += '<br><br><h4>JSON Output:</h4>';
         listHtml += '<textarea id="jsonOutput" style="width:100%; height:150px; font-size:10px;">' + JSON.stringify(gcpPoints, null, 2) + '</textarea>';
 
         document.getElementById('gcpList').innerHTML = listHtml;
@@ -134,7 +134,7 @@ def create_gcp_selector_map(
         map.removeLayer(markers[index]);
         markers.splice(index, 1);
 
-        // マーカーの番号を更新
+        // Re-number remaining markers
         for (var i = 0; i < markers.length; i++) {
             markers[i].setIcon(L.divIcon({
                 className: 'gcp-marker',
@@ -150,7 +150,7 @@ def create_gcp_selector_map(
         var dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify({
             "gcp_wgs84": gcpPoints,
             "gcp_image": [],
-            "note": "gcp_imageには動画フレームから取得した対応点を追加してください"
+            "note": "Add corresponding points from the video frame to gcp_image"
         }, null, 2));
         var dlAnchorElem = document.createElement('a');
         dlAnchorElem.setAttribute("href", dataStr);
@@ -158,7 +158,7 @@ def create_gcp_selector_map(
         dlAnchorElem.click();
     }
 
-    // 地図クリックイベント
+    // Map click event
     document.addEventListener('DOMContentLoaded', function() {
         setTimeout(function() {
             var mapElement = document.querySelector('.folium-map');
@@ -197,11 +197,11 @@ def create_gcp_selector_map(
 
     <div id="gcpList" style="position:fixed; top:10px; right:10px; width:280px; max-height:90vh; overflow-y:auto; background:white; padding:15px; border-radius:8px; box-shadow:0 2px 10px rgba(0,0,0,0.2); z-index:1000;">
         <h4>GCP Points</h4>
-        <p>読み込み中...</p>
+        <p>Loading...</p>
     </div>
     """
 
-    # フレーム画像パネル
+    # Frame image panel
     if frame_img_b64:
         click_js += """
     <style>
@@ -231,7 +231,7 @@ def create_gcp_selector_map(
         <img src="data:image/png;base64,""" + frame_img_b64 + """" draggable="false">
     </div>
     <script>
-    // ドラッグ移動
+    // Drag to reposition panel
     (function() {
         var panel = document.getElementById('framePanel');
         var header = document.getElementById('frameHeader');
@@ -254,45 +254,45 @@ def create_gcp_selector_map(
     </script>
     """
 
-    # HTMLに追加
+    # Inject into HTML
     m.get_root().html.add_child(folium.Element(click_js))
 
-    # 出力パス
+    # Resolve output path
     if output_path is None:
         output_path = os.path.join(
             os.path.dirname(__file__),
             'gcp_selector_map.html'
         )
 
-    # 保存
+    # Save
     m.save(output_path)
-    print(f"地図を保存しました: {output_path}")
+    print(f"Map saved: {output_path}")
 
     return output_path
 
 
 def load_gcp_config(config_path: str) -> dict:
-    """GCP設定ファイルを読み込む"""
+    """Load GCP config file"""
     with open(config_path, 'r', encoding='utf-8') as f:
         return json.load(f)
 
 
 def save_gcp_config(config: dict, config_path: str):
-    """GCP設定ファイルを保存"""
+    """Save GCP config file"""
     with open(config_path, 'w', encoding='utf-8') as f:
         json.dump(config, f, indent=2, ensure_ascii=False)
-    print(f"GCP設定を保存しました: {config_path}")
+    print(f"GCP config saved: {config_path}")
 
 
 if __name__ == '__main__':
     import argparse
 
-    parser = argparse.ArgumentParser(description='GCP選択用地図を生成')
-    parser.add_argument('--lat', type=float, default=35.6812, help='中心緯度')
-    parser.add_argument('--lon', type=float, default=139.7671, help='中心経度')
-    parser.add_argument('--zoom', type=int, default=18, help='ズームレベル')
-    parser.add_argument('--output', type=str, default=None, help='出力HTMLパス')
-    parser.add_argument('--open', action='store_true', help='ブラウザで開く')
+    parser = argparse.ArgumentParser(description='Generate GCP selection map')
+    parser.add_argument('--lat', type=float, default=35.6812, help='Center latitude')
+    parser.add_argument('--lon', type=float, default=139.7671, help='Center longitude')
+    parser.add_argument('--zoom', type=int, default=18, help='Zoom level')
+    parser.add_argument('--output', type=str, default=None, help='Output HTML path')
+    parser.add_argument('--open', action='store_true', help='Open in browser')
 
     args = parser.parse_args()
 

@@ -1,9 +1,9 @@
 """
-OpenCV を使用して動画内の通勤者を検出・追跡するスクリプト
-- YOLOX-Tiny (OpenCV DNN + ONNX) で人物検出(CentroidTrackerで追跡)
-- 動線分析・滞在時間測定
+Script for detecting and tracking pedestrians in video using OpenCV
+- Person detection with YOLOX-Tiny (OpenCV DNN + ONNX) and tracking with CentroidTracker
+- Flow analysis and dwell time measurement
 
-必要なライブラリ:
+Requirements:
 pip install opencv-python numpy
 
 License: MIT License
@@ -50,12 +50,12 @@ class CentroidTracker:
         self.last_seen = {}  # ID: last frame detected
         self.max_disappeared = max_disappeared
 
-    def register(self, centroid, foot_point, frame_num):
+    def register(self, centroid, foot_point, frame_num, bbox_height):
         """register a new object with a unique ID"""
         self.objects[self.next_object_id] = centroid
         self.disappeared[self.next_object_id] = 0
         self.trajectories[self.next_object_id].append(
-            (foot_point[0], foot_point[1], frame_num)
+            (foot_point[0], foot_point[1], frame_num, bbox_height)
         )
         self.first_seen[self.next_object_id] = frame_num
         self.last_seen[self.next_object_id] = frame_num
@@ -90,15 +90,17 @@ class CentroidTracker:
         # conpute centroids and foot points for the current detections
         input_centroids = np.zeros((len(rects), 2), dtype="int")
         input_feet = np.zeros((len(rects), 2), dtype="int")
+        input_bbox_heights = np.zeros(len(rects), dtype="int")
         for i, (x1, y1, x2, y2) in enumerate(rects):
             cx = int((x1 + x2) / 2.0)
             input_centroids[i] = (cx, int((y1 + y2) / 2.0))
             input_feet[i] = (cx, y2)  # foot point is the bottom center of the bounding box
+            input_bbox_heights[i] = int(y2 - y1)
 
         # if no existing objects, register all input centroids
         if len(self.objects) == 0:
             for i in range(len(input_centroids)):
-                self.register(input_centroids[i], input_feet[i], frame_num)
+                self.register(input_centroids[i], input_feet[i], frame_num, input_bbox_heights[i])
 
         # existing objects are present, match input centroids to existing object centroids
         else:
@@ -130,7 +132,7 @@ class CentroidTracker:
                 self.objects[object_id] = input_centroids[col]  # using the centroid for tracking
                 self.disappeared[object_id] = 0
                 self.trajectories[object_id].append(
-                    (input_feet[col][0], input_feet[col][1], frame_num)  # using the foot point for trajectory analysis
+                    (input_feet[col][0], input_feet[col][1], frame_num, input_bbox_heights[col])  # using the foot point for trajectory analysis
                 )
                 self.last_seen[object_id] = frame_num
 
@@ -149,7 +151,7 @@ class CentroidTracker:
             # not matched input centroids
             unused_cols = set(range(D.shape[1])) - used_cols
             for col in unused_cols:
-                self.register(input_centroids[col], input_feet[col], frame_num)
+                self.register(input_centroids[col], input_feet[col], frame_num, input_bbox_heights[col])
 
         return self.objects
 
@@ -257,7 +259,7 @@ def detect_persons(frame, session):
 
     # objectness * person_class_score = confidence score for person class
     objectness = predictions[:, 4]
-    person_scores = predictions[:, 5]  # クラス0 = person
+    person_scores = predictions[:, 5]  # class 0 = person
     scores = objectness * person_scores
 
     # confidence thresholding
@@ -322,9 +324,9 @@ def analyze_trajectory(trajectory, fps, frame_width, frame_height):
     if len(trajectory) < 2:
         return None
 
-    # trajectory is a list of (x, y, frame_num)
-    points = np.array([(x, y) for x, y, _ in trajectory])
-    frames = np.array([f for _, _, f in trajectory])
+    # trajectory is a list of (x, y, frame_num, bbox_height)
+    points = np.array([(x, y) for x, y, *_ in trajectory])
+    frames = np.array([f for _, _, f, *_ in trajectory])
 
     # movement distance (sum of distances between consecutive points)
     total_distance = 0
@@ -500,15 +502,16 @@ def save_analysis(video_path, tracker, fps, width, height, output_dir):
                     'x': int(x),
                     'y': int(y),
                     'frame': frame,
-                    'time_sec': round(frame / fps, 3)
+                    'time_sec': round(frame / fps, 3),
+                    'bbox_height': int(bbox_height)
                 }
-                for x, y, frame in trajectory
+                for x, y, frame, bbox_height in trajectory
             ]
 
             # LineString as geometry for potential GIS visualization (after coordinate transformation)
             analysis['geometry'] = {
                 'type': 'LineString',
-                'coordinates': [[int(x), int(y)] for x, y, _ in trajectory]
+                'coordinates': [[int(x), int(y)] for x, y, *_ in trajectory]
             }
 
             results['tracks'].append(analysis)
