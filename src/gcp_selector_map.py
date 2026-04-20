@@ -45,6 +45,7 @@ def create_gcp_selector_map(
     m = folium.Map(
         location=[center_lat, center_lon],
         zoom_start=zoom_start,
+        max_zoom=22,
         tiles=None
     )
 
@@ -52,6 +53,8 @@ def create_gcp_selector_map(
     folium.TileLayer(
         tiles='OpenStreetMap',
         name='OpenStreetMap',
+        max_zoom=22,
+        max_native_zoom=19,
         control=True
     ).add_to(m)
 
@@ -60,6 +63,8 @@ def create_gcp_selector_map(
         tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
         attr='Esri',
         name='航空写真 (Esri)',
+        max_zoom=22,
+        max_native_zoom=18,
         control=True
     ).add_to(m)
 
@@ -68,6 +73,8 @@ def create_gcp_selector_map(
         tiles='https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg',
         attr='国土地理院',
         name='航空写真 (国土地理院)',
+        max_zoom=22,
+        max_native_zoom=18,
         control=True
     ).add_to(m)
 
@@ -76,6 +83,8 @@ def create_gcp_selector_map(
         tiles='https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png',
         attr='国土地理院',
         name='標準地図 (国土地理院)',
+        max_zoom=22,
+        max_native_zoom=18,
         control=True
     ).add_to(m)
 
